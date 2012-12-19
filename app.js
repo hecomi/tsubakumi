@@ -154,12 +154,19 @@ Command.find({}, function(err, commands) {
 // {{{
 
 // 誤認識対策（ゴミワードを混ぜておく）
-var gomi = 'あいうえおかきくけこさしすせそ';
+var gomi = 'あいうえお';
 for (var i = 0; i < gomi.length; ++i) {
+	grammar.add(gomi[i]);
 	for (var j = 0; j < gomi.length; ++j) {
 		grammar.add(gomi[i] + gomi[j]);
+		for (var k = 0; k < gomi.length; ++k) {
+			grammar.add(gomi[i] + gomi[j] + gomi[k]);
+		}
 	}
 }
+
+// 一時ファイルに名前をつける
+grammar.setFileName('kaden');
 
 async.series([
 	// 機器の機能を操作する文章を登録
@@ -180,6 +187,7 @@ async.series([
 				}
 			});
 			grammar.addSymbol('DEVICE', deviceNameArr);
+			grammar.add('<DEVICE>');
 			callback();
 		});
 	},
