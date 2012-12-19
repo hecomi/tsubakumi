@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title><%= title %></title>
+	<link rel="stylesheet" href="/stylesheets/bootstrap/css/bootstrap.css" />
+	<style>
+		body {
+			padding-top: 60px;
+		}
+	</style>
+	<link rel="stylesheet" href="/stylesheets/bootstrap/css/bootstrap-responsive.css" />
+	<link rel="stylesheet" href="/stylesheets/style.css" />
+	<script src="//ajax.googleapis.com/ajax/libs/jquery/1.8.2/jquery.min.js"></script>
+	<script src="/stylesheets/bootstrap/js/bootstrap.js"></script>
+	<script src="/javascripts/confirm.js"></script>
+	<script src="/socket.io/socket.io.js"></script>
+	<script>
+		// 通知メッセージを指定した場所に指定した形式で出す
+		function showMsg(msgType, msgStr, $targetElem) {
+			if (msgType !== 'error' && msgType !== 'info' && msgType !== 'success') {
+				console.log('Invalid msgType: ' + msgType);
+				return;
+			}
+			if (!$targetElem) {
+				$targetElem = $('#title');
+			}
+			$('<div class="alert alert-' + msgType + '"></div>')
+				.appendTo($targetElem)
+				.html( msgStr )
+				.hide()
+				.show(300, function() {
+					setTimeout(function() {
+						$(this).hide(300, function() {
+							$(this).remove();
+						});
+					}.bind(this), 3000);
+				});
+		}
+
+		// Socket.io の接続
+		if (!io) { showMsg('error',   'Socket.io に接続できません'); }
+		var socket = io.connect('http://' + location.host);
+		socket.on('response', function (data) {
+			console.log(data);
+			showMsg('success', 'Socket.io に接続しました');
+		});
+
+		// デバイスの機能の追加/学習/テスト/更新/削除
+		function getFullData(data) {
+			data.command = $('#command' + data._id + ' [name=command]').val();
+			data.type    = $('#command' + data._id + ' [name=type]').val();
+			data.func    = $('#command' + data._id + ' [name=func]').val();
+			data.reply   = $('#command' + data._id + ' [name=reply]').val();
+			console.log(data);
+			return data;
+		}
+		function addCommand()        { socket.emit('commands/add'); }
+		function testCommand(data)   { socket.emit('commands/test',   getFullData(data)); }
+		function updateCommand(data) { socket.emit('commands/update', getFullData(data)); }
+		function deleteCommand(data) {
+			confirm('確認', '本当に削除しますか？', 'キャンセル', '削除', function() {
+				socket.emit('commands/delete', getFullData(data));
+			});
+		}
+
+		// コマンドフィールドの追加
+		socket.on('commands/add', function(command) {
+			console.log('command/add');
+			if (command.error) {
+				showMsg('error', command.error, $('#command' + command._id));
+			} else {
+				console.log(command);
+				$('#add-command').before(
+					'<tr>'
+						+ '<td id="command' + command._id + '">\n'
+							+ '<table class="table table-borderless">\n'
+								+ '<tbody>\n'
+									+ '<tr>\n'
+										+ '<th>命令</th>\n'
+										+ '<td><input name="command" type="text" value="" class="span7" /></td>\n'
+										+ '<th>タイプ</th>\n'
+										+ '<td>\n'
+											+ '<select name="type">\n'
+												+ '<option value="1">自然言語</option>\n'
+												+ '<option value="2">スクリプト</option>\n'
+											+ '</select>\n'
+										+ '</td>\n'
+									+ '</tr>\n'
+									+ '<tr>\n'
+										+ '<th>解釈</th>\n'
+										+ '<td colspan="3"><textarea name="func" class="span11"></textarea></td>\n'
+									+ '</tr>\n'
+									+ '<tr>\n'
+										+ '<th>応答</th>\n'
+										+ '<td><input name="reply" type="text" value="" class="span7" /></td>\n'
+										+ '<td class="right" colspan="2">\n'
+											+ '<input type="button" value="更新" class="btn btn-inverse" onclick="updateCommand({_id: \'' + command._id + '\'})"/>\n'
+											+ '<input type="button" value="テスト" class="btn btn-info" onclick="testCommand({_id: \'' + command._id + '\'})"/>\n'
+											+ '<input type="button" value="x" class="btn" onclick="deleteCommand({_id: \'' + command._id + '\'})" />\n'
+										+ '</td>\n'
+									+ '</tr>\n'
+								+ '</tbody>\n'
+							+ '</table>\n'
+						+ '</td>\n'
+					+ '</tr>'
+				);
+				showMsg('success', 'コマンドを追加しました。', $('#command' + command._id));
+			}
+		});
+
+		// コマンドフィールドの削除
+		socket.on('commands/delete', function(command) {
+			console.log('commands/delete');
+			if (command.error) {
+				showMsg('error', command.error, $('#command' + command._id));
+			} else {
+				$('#command' + command._id).remove();
+				showMsg('success', 'コマンドを削除しました。');
+			}
+		});
+
+		// コマンドフィールドの更新
+		socket.on('commands/update', function(command) {
+			console.log('commands/update');
+			if (command.error) {
+				showMsg('error', command.error, $('#command' + command._id));
+			} else {
+				showMsg('success', 'コマンドを更新しました。', $('#command' + command._id));
+			}
+		});
+
+		// コマンドのテスト
+		socket.on('commands/test', function(command) {
+			console.log('commands/test');
+			if (command.error) {
+				showMsg('error', command.error, $('#command' + command._id));
+			} else {
+				showMsg('success', 'コマンドをテストしました。</br> RESULT: ' + command.result, $('#command' + command._id));
+			}
+		});
+	</script>
+</head>
+<body>
+	<div class="navbar navbar-inverse navbar-fixed-top">
+		<div class="navbar-inner">
+			<div class="container">
+				<a class="brand" href="#">hecomi room</a>
+				<div class="nav-collapse collapse">
+					<ul class="nav">
+						<li><a href="/devices/">Devices</a></li>
+						<li class="active"><a href="/commands/">Commands</a></li>
+					</ul>
+				</div><!--/.nav-collapse -->
+			</div>
+		</div>
+	</div>
+	<div class="container">
+		<div id="title">
+			<h1><%= title %></h1>
+		</div>
+		<div id="commands">
+			<div class="msg"></div>
+			<table class="table table-condensed table-striped span10">
+				<tbody>
+					<% commands.forEach(function(command) { %>
+					<tr>
+						<td id="command<%= command._id %>">
+							<table class="table table-borderless">
+								<tbody>
+									<tr>
+										<th>命令</th>
+										<td><input name="command" type="text" value="<%= command.command %>" class="span7" /></td>
+										<th>タイプ</th>
+										<td>
+											<select name="type">
+												<option value="1" <%= (command.type == 1 ? 'selected' : '') %>>自然言語</option>
+												<option value="2" <%= (command.type == 2 ? 'selected' : '') %>>スクリプト</option>
+											</select>
+										</td>
+									</tr>
+									<tr>
+										<th>解釈</th>
+										<td colspan="3"><textarea name="func" class="span11"><%= command.func %></textarea></td>
+									</tr>
+									<tr>
+										<th>応答</th>
+										<td><input name="reply" type="text" value="<%= command.reply %>" class="span7" /></td>
+										<td class="right" colspan="2">
+											<input type="button" value="更新" class="btn btn-inverse" onClick="updateCommand({_id: '<%= command._id %>'})"/>
+											<input type="button" value="テスト" class="btn btn-info" onClick="testCommand({_id: '<%= command._id %>'})"/>
+											<input type="button" value="x" class="btn" onClick="deleteCommand({_id: '<%= command._id %>'})" />
+										</td>
+									</tr>
+								</tbody>
+							</table>
+						</td>
+					</tr>
+					<% }); %>
+					<tr id="add-command">
+						<td class="right">
+							<input type="button" class="btn" value="コマンドを追加" onClick="addCommand()">
+						</td>
+					</tr>
+				</tbody>
+			</table>
+		</div>
+	</div>
+</body>
+</html>
+

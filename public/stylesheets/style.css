@@ -1,0 +1,31 @@
+#devices h2 {
+	margin-top: 50px;
+}
+
+.float-right {
+	float: right;
+}
+
+td.right {
+	text-align: right;
+}
+
+.margin-auto {
+	margin: 0px auto;
+}
+
+th {
+	vertical-align: middle;
+	text-align: center;
+}
+
+.table.table-borderless td,
+.table.table-borderless th {
+	border-top: 0;
+	background: transparent !important;
+}
+
+.table th {
+	vertical-align: middle;
+}
+

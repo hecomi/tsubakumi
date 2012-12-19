@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title><%= title %></title>
+	<link rel="stylesheet" href="/stylesheets/bootstrap/css/bootstrap.css" />
+	<style>
+		body {
+			padding-top: 60px;
+		}
+	</style>
+	<link rel="stylesheet" href="/stylesheets/bootstrap/css/bootstrap-responsive.css" />
+	<link rel="stylesheet" href="/stylesheets/style.css" />
+	<script src="//ajax.googleapis.com/ajax/libs/jquery/1.8.2/jquery.min.js"></script>
+	<script src="/stylesheets/bootstrap/js/bootstrap.js"></script>
+	<script src="/javascripts/confirm.js"></script>
+	<script src="/socket.io/socket.io.js"></script>
+	<script>
+		// 通知メッセージを指定した場所に指定した形式で出す
+		function showMsg(msgType, msgStr, $targetElem) {
+			if (msgType !== 'error' && msgType !== 'info' && msgType !== 'success') {
+				console.log('Invalid msgType: ' + msgType);
+				return;
+			}
+			if (!$targetElem) {
+				$targetElem = $('#title');
+			}
+			$('<div class="alert alert-' + msgType + '"></div>')
+				.appendTo($targetElem)
+				.html( msgStr )
+				.hide()
+				.show(300, function() {
+					setTimeout(function() {
+						$(this).hide(300, function() {
+							$(this).remove();
+						});
+					}.bind(this), 3000);
+				});
+		}
+
+		// DOM がロードされたら処理
+		$(function(){
+			// サーバからの最初のメッセージを表示
+			<% if (error) { %>
+			showMsg('error', '<%= error %>');
+			<% } %>
+			<% if (message) { %>
+			showMsg('info', '<%= message %>');
+			<% } %>
+		});
+
+		// Socket.io の接続
+		if (!io) { showMsg('error',   'Socket.io に接続できません'); }
+
+		var socket = io.connect('http://' + location.host);
+		socket.on('response', function (data) {
+			console.log(data);
+			showMsg('success', 'Socket.io に接続しました');
+		});
+
+		// デバイスの機能の追加/学習/テスト/更新/削除
+		function getFullData(data) {
+			data.name    = $('#name'    + data.ir).val();
+			data.command = $('#command' + data.ir).val();
+			data.reply   = $('#reply'   + data.ir).val();
+			console.log(data);
+			return data;
+		}
+		function addFunc(data)    { socket.emit('devices/funcs/add',    getFullData(data)); }
+		function testFunc(data)   { socket.emit('devices/funcs/test',   getFullData(data)); }
+		function updateFunc(data) { socket.emit('devices/funcs/update', getFullData(data)); }
+		function deleteFunc(data) {
+			var data = getFullData(data);
+			confirm('確認', '本当に IR#' + data.ir + ' を削除しますか？', 'キャンセル', '削除', function() {
+				socket.emit('devices/funcs/delete', data);
+			});
+		}
+		function learnFunc(data, elem)  {
+			var $elem = $(elem), $enableds = $(':enabled'), $disableds = $(':disabled');
+			if ($elem.val() === '学習') {
+				$enableds.attr('disabled', 'disabled');
+				$elem.val('中止').removeAttr('disabled');
+				socket.emit('devices/funcs/learn', data);
+			} else {
+				$disableds.removeAttr('disabled');
+				$elem.val('学習');
+				socket.emit('devices/funcs/cancel', data);
+			}
+		}
+
+		// デバイスの機能フィールドの追加
+		socket.on('devices/funcs/add', function(device) {
+			console.log('devices/funcs/add');
+			if (device.error) {
+				showMsg('error', device.error, $('#device' + device._id + ' .msg'));
+			} else {
+				var func = device.func;
+				$('#add-func-' + device._id).before(
+					'<tr id="func' + func.ir + '">\n'
+						+ '<td>' + func.ir + '</td>\n'
+						+ '<td><input type="text" value="' + func.name + '" class="span2" id="name' + func.ir + '" /></td>\n'
+						+ '<td><input type="text" value="' + func.command + '" class="span2" id="command' + func.ir + '" /></td>\n'
+						+ '<td><input type="text" value="' + func.reply + '" class="span3" id="reply' + func.ir + '" /></td>\n'
+						+ '<td><input type="button" value="更新" class="btn btn-inverse" onClick="updateFunc({_id: \'' + device._id + '\', ir: ' + func.ir + '})"/></td>\n'
+						+ '<td><input type="button" value="学習" class="btn btn-success" onClick="learnFunc({_id: \'' + device._id + '\', ir: ' + func.ir + '}, this)" /></td>\n'
+						+ '<td><input type="button" value="テスト" class="btn btn-info" onClick="testFunc({_id: \'' + device._id + '\', ir: ' + func.ir + '})"/></td>\n'
+						+ '<td><input type="button" value="x" class="btn" onClick="deleteFunc({_id: \'' + device._id + '\', ir: ' + func.ir + '})" /><td>\n'
+					+ '</tr>'
+				);
+				showMsg('success', 'IR#' + device.func.ir + ' を追加しました。', $('#device' + device._id + ' .msg'));
+			}
+		});
+
+		// デバイスの機能フィールドの削除
+		socket.on('devices/funcs/delete', function(device) {
+			console.log('devices/funcs/delete');
+			if (device.error) {
+				showMsg('error', device.error, $('#device' + device._id + ' .msg'));
+			} else {
+				$('#func' + device.func.ir).remove();
+				showMsg('success', 'IR#' + device.func.ir + ' を削除しました。', $('#device' + device._id + ' .msg'));
+			}
+		});
+
+		// デバイスの機能フィールドの更新
+		socket.on('devices/funcs/update', function(device) {
+			console.log('devices/funcs/update');
+			if (device.error) {
+				showMsg('error', device.error, $('#device' + device._id + ' .msg'));
+			} else {
+				showMsg('success', 'IR#' + device.func.ir + ' を更新しました。', $('#device' + device._id + ' .msg'));
+			}
+		});
+
+		// iRemocon に信号を学習させる
+		socket.on('devices/funcs/learn', function(device) {
+			console.log('devices/funcs/learn');
+			$(':disabled').removeAttr('disabled');
+			$('[value=中止]').val('学習');
+			if (device.error) {
+				showMsg('error', device.error, $('#device' + device._id + ' .msg'));
+			} else {
+				showMsg('success', 'IR#' + device.func.ir + ' を学習しました', $('#device' + device._id + ' .msg'));
+			}
+		});
+
+		// iRemocon に学習させた信号をテストする
+		socket.on('devices/funcs/test', function(device) {
+			console.log('devices/funcs/test');
+			if (device.error) {
+				showMsg('error', device.error, $('#device' + device._id + ' .msg'));
+			} else {
+				showMsg('success', 'IR#' + device.func.ir + ' をテストします', $('#device' + device._id + ' .msg'));
+			}
+		});
+	</script>
+</head>
+<body>
+	<div class="navbar navbar-inverse navbar-fixed-top">
+		<div class="navbar-inner">
+			<div class="container">
+				<a class="brand" href="#">hecomi room</a>
+				<div class="nav-collapse collapse">
+					<ul class="nav">
+						<li class="active"><a href="/devices/">Devices</a></li>
+						<li><a href="/commands/">Commands</a></li>
+					</ul>
+				</div><!--/.nav-collapse -->
+			</div>
+		</div>
+	</div>
+	<div class="container">
+		<div id="title">
+			<h1><%= title %></h1>
+		</div>
+
+		<div id="add-device">
+			<h2>追加</h2>
+			<form action="/devices/add" method="POST">
+				<input type="text" name="name" />
+				<input type="submit" value=" 追 加 " class="btn btn-primary" />
+			</form>
+		</div>
+
+		<div id="devices">
+			<% devices.forEach(function(device) { %>
+			<% if (!device.name) return; %>
+			<div id="device<%= device._id %>">
+				<form action="/devices/delete" method="POST">
+					<input type="button" value="デバイスを削除" class="btn float-right" onClick="confirm('確認', '本当に削除しますか？', 'キャンセル', '削除', function() { this.form.submit(); }.bind(this) );" />
+					<input type="hidden" name="_id" value="<%= device._id %>" />
+					<input type="hidden" name="name" value="<%= device.name %>" />
+				</form>
+				<h2><%= device.name %></h2>
+				<div class="msg"></div>
+				<table class="table table-condensed table-striped">
+					<thead>
+						<tr>
+							<th>IR</th>
+							<th>機能</th>
+							<th>命令</th>
+							<th>返事</th>
+							<th>更新</th>
+							<th>学習</th>
+							<th>テスト</th>
+							<th>削除</th>
+						</tr>
+					</thead>
+					<tbody>
+						<% device.funcs.forEach( function(func) { %>
+						<tr id="func<%= func.ir %>">
+							<td><%= func.ir %></td>
+							<td><input id="name<%= func.ir %>" type="text" value="<%= func.name %>" class="span2" /></td>
+							<td><input id="command<%= func.ir %>" type="text" value="<%= func.command %>" class="span2" /></td>
+							<td><input id="reply<%= func.ir %>" type="text" value="<%= func.reply %>" class="span3" /></td>
+							<td><input type="button" value="更新" class="btn btn-inverse" onClick="updateFunc({_id: '<%= device._id %>', ir: <%= func.ir %>})"/></td>
+							<td><input type="button" value="学習" class="btn btn-success" onClick="learnFunc({_id: '<%= device._id %>', ir: <%= func.ir %>}, this)" /></td>
+							<td><input type="button" value="テスト" class="btn btn-info" onClick="testFunc({_id: '<%= device._id %>', ir: <%= func.ir %>})"/></td>
+							<td><input type="button" value="x" class="btn" onClick="deleteFunc({_id: '<%= device._id %>', ir: <%= func.ir %>})" /><td>
+						</tr>
+						<% }); %>
+						<tr id="add-func-<%= device._id %>">
+							<td colspan="8" class="right">
+								<input type="button" class="btn" value="機能を追加" onClick="addFunc({_id: '<%= device._id %>'})">
+							</td>
+						</tr>
+					</tbody>
+				</table>
+			</div>
+			<% }); %>
+		</div>
+	</div>
+</body>
+</html>
+
