@@ -9,25 +9,33 @@
  *  モジュールの読み込み
  * ------------------------------------------------------------------------ */
 // {{{
-var Settings  = require('./setting.js')
-  , express   = require('express')
-  , routes    = require('./routes')
-  , http      = require('http')
-  , path      = require('path')
-  , mongoose  = require('mongoose')
-  , Schema    = mongoose.Schema
-  , ObjectId  = Schema.ObjectId
-  , async     = require('async')
-  , socketio  = require('socket.io')
-  , printf    = require('printf')
-  , iRemocon  = require('iRemocon')
-  , iremocon  = new iRemocon(Settings.iRemocon.ip)
-  , iRemocon  = require('iRemocon')
-  , Julius    = require('julius')
-  , grammar   = new Julius.Grammar()
-  , julius    = null
-  , OpenJTalk = require('openjtalk')
-  , TTS       = new OpenJTalk()
+
+// 内部で使うもの
+var Settings   = require('./setting.js')
+  , express    = require('express')
+  , routes     = require('./routes')
+  , http       = require('http')
+  , path       = require('path')
+  , mongoose   = require('mongoose')
+  , Schema     = mongoose.Schema
+  , ObjectId   = Schema.ObjectId
+  , async      = require('async')
+  , socketio   = require('socket.io')
+  , printf     = require('printf')
+  , iRemocon   = require('iRemocon')
+  , iremocon   = new iRemocon(Settings.iRemocon.ip)
+  , Julius     = require('julius')
+  , julius     = null
+  , OpenJTalk  = require('openjtalk')
+  , TTS        = new OpenJTalk()
+  , twitter    = require('twitter')
+  , date_utils = require('date-utils')
+  , TW_SETTING = require('./twitter.oauth.js')
+;
+
+// Commands で使いそうなもの
+var request    = require('request')
+  , cheerio    = require('cheerio')
 ;
 
 // }}}
@@ -66,33 +74,62 @@ mongoose.connect('mongodb://localhost/HomeAutomationSystem');
 // }}}
 
 /* ------------------------------------------------------------------------
+ *  登録コマンドから使える関数
+ *    Commands でコマンドを登録する際に使える関数達
+ * ------------------------------------------------------------------------ */
+// {{{
+// 1. Twitter につぶやく
+function tweet(msg) {
+	hecomiroid.updateStatus(msg, function (data) {
+		console.log('[Twitter] 「' + msg + '」とつぶやきました');
+	});
+}
+
+// 2. TTS で喋る
+function talk() {
+	TTS.talk(arguments[0], arguments[1], arguments[2]);
+}
+
+// 3. コマンドを自然言語から実行する
+function run(str) {
+	Interpreter.run(str);
+}
+// }}}
+
+/* ------------------------------------------------------------------------
  *  コマンドマップ
+ *    渡された文章を登録した正規表現で引っ掛けて実行
  * ------------------------------------------------------------------------ */
 // {{{
 var Interpreter = {
+	// コマンドを格納するマップ
 	map_ : {},
+
+	// コマンドを追加
 	add  : function(command, func, reply) {
 		if ( this.map_.hasOwnProperty(command) ) {
 			console.error('同じコマンドが既に存在します:', command);
 			return;
 		}
-		this.map_[command] = function(arg, talkFlag, callback) {
+		this.map_[command] = function(sentence, talkFlag, callback, caller) {
 			if (talkFlag && reply != '') {
 				TTS.talk(reply, function(err) {
 					if (err) throw err;
-					var result = func(arg);
-					if (callback) callback(null, result);
+					var result = func(sentence, caller);
+					if (callback) callback(null, result, reply);
 				});
 			} else {
-				var result = func(arg);
-				if (callback) callback(null, result);
+				var result = func(sentence, caller);
+				if (callback) callback(null, result, reply);
 			}
 		}
 	},
-	run  : function(sentence, talkFlag, callback) {
+
+	// sentence で渡された文章を解釈して
+	run  : function(sentence, talkFlag, callback, caller) {
 		for (var x in this.map_) {
 			if ( new RegExp(x).test(sentence) ) {
-				this.map_[x](sentence, talkFlag, callback);
+				this.map_[x](sentence, talkFlag, callback, caller);
 				return;
 			}
 		}
@@ -118,7 +155,7 @@ Device.find({}, function(err, devices) {
 Command.find({}, function(err, commands) {
 	commands.forEach(function(command) {
 		if (command.type === 1) { // 自然言語
-			var func = function(args) {
+			var func = function(sentence, caller) {
 				command.func.split(';\n').forEach(function(sentence) {
 					if (sentence) {
 						console.log(sentence);
@@ -133,11 +170,11 @@ Command.find({}, function(err, commands) {
 			}
 			Interpreter.add(command.command, func, command.reply);
 		} else { // スクリプト
-			var func = function(args) {
+			var func = function(sentence, caller) {
 				eval(
-					'(function(args) {\n' +
+					'(function(sentence, caller) {\n' +
 						command.func +
-					'})(command);'
+					'})(sentence, caller);'
 				);
 			}
 			Interpreter.add(command.command, func, command.reply);
@@ -153,72 +190,141 @@ Command.find({}, function(err, commands) {
  * ------------------------------------------------------------------------ */
 // {{{
 
-// 誤認識対策（ゴミワードを混ぜておく）
-var gomi = 'あいうえお';
-for (var i = 0; i < gomi.length; ++i) {
-	grammar.add(gomi[i]);
-	for (var j = 0; j < gomi.length; ++j) {
-		grammar.add(gomi[i] + gomi[j]);
-		for (var k = 0; k < gomi.length; ++k) {
-			grammar.add(gomi[i] + gomi[j] + gomi[k]);
+function startVoiceRecognition() {
+
+	// grammar, julius の初期化
+	julius  = null;
+	grammar = new Julius.Grammar();
+
+	// 誤認識対策（ゴミワードを混ぜておく）
+	var gomi = 'あいうえお';
+	for (var i = 0; i < gomi.length; ++i) {
+		grammar.add(gomi[i]);
+		for (var j = 0; j < gomi.length; ++j) {
+			grammar.add(gomi[i] + gomi[j]);
+			for (var k = 0; k < gomi.length; ++k) {
+				grammar.add(gomi[i] + gomi[j] + gomi[k]);
+			}
 		}
 	}
+
+	// 一時ファイルに名前をつける
+	grammar.setFileName('kaden');
+
+	async.series([
+		// 機器の機能を操作する文章を登録
+		// 機器シンボルもつくっておく
+		function(callback) {
+			Device.find({}, function(err, devices) {
+				var deviceNameArr = [];
+				devices.forEach(function(device) {
+					if (device.name != undefined && device.name != '') {
+						deviceNameArr.push(device.name);
+						var cmd = device.name + '(を)?('
+						device.funcs.forEach(function(func) {
+							if (func.command == '') return;
+							cmd += func.command + '|';
+						});
+						// 最後の | を消す
+						cmd = cmd.slice(0, -1) + ')';
+						grammar.add(cmd);
+					}
+				});
+				grammar.addSymbol('DEVICE', deviceNameArr);
+				grammar.add('<DEVICE>');
+				callback();
+			});
+		},
+		// マクロ / コマンドを実行する文章を登録
+		function(callback) {
+			Command.find({}, function(err, commands) {
+				commands.forEach(function(command) {
+					if (command.command !== '') {
+						grammar.add(command.command);
+					}
+				});
+				callback();
+			});
+		},
+		function(callback) {
+			grammar.compile(function(err, result) {
+				if (err) throw err;
+				julius = new Julius( grammar.getJconf() );
+				grammar.deleteFiles();
+				julius.on('result', function(str) {
+					console.log(str);
+					Interpreter.run(str, true);
+				});
+				callback();
+			});
+		},
+		function() {
+			julius.start();
+		}
+	]);
 }
 
-// 一時ファイルに名前をつける
-grammar.setFileName('kaden');
+// startVoiceRecognition();
 
-async.series([
-	// 機器の機能を操作する文章を登録
-	// 機器シンボルもつくっておく
-	function(callback) {
-		Device.find({}, function(err, devices) {
-			var deviceNameArr = [];
-			devices.forEach(function(device) {
-				if (device.name != undefined && device.name != '') {
-					deviceNameArr.push(device.name);
-					var cmd = device.name + '(を)?('
-					device.funcs.forEach(function(func) {
-						cmd += func.command + '|';
-					});
-					// 最後の | を消す
-					cmd = cmd.slice(0, -1) + ')';
-					grammar.add(cmd);
-				}
-			});
-			grammar.addSymbol('DEVICE', deviceNameArr);
-			grammar.add('<DEVICE>');
-			callback();
-		});
-	},
-	// マクロ / コマンドを実行する文章を登録
-	function(callback) {
-		Command.find({}, function(err, commands) {
-			commands.forEach(function(command) {
-				if (command.command !== '') {
-					grammar.add(command.command);
-				}
-			});
-			callback();
-		});
-	},
-	function(callback) {
-		grammar.compile(function(err, result) {
+// メモリリーク？のせいか Ubuntu 上で重くなる症例に対処
+// 10 分起きに再起動する
+// setInterval(function() {
+// 	julius.stop();
+// 	startVoiceRecognition();
+// }, 1000 * 60 * 10);
+
+// }}}
+
+/* ------------------------------------------------------------------------
+ *  Twitter
+ *    Twitter でのつぶやきに反応する
+ * ------------------------------------------------------------------------ */
+// {{{
+
+// OAuth でログイン
+var hecomiroid = new twitter({
+	consumer_key        : TW_SETTING.CONSUMER_KEY,
+	consumer_secret     : TW_SETTING.CONSUMER_SECRET,
+	access_token_key    : TW_SETTING.ACCESS_TOKEN_KEY,
+	access_token_secret : TW_SETTING.ACCESS_TOKEN_SECRET
+});
+
+// 起動時刻をつぶやく
+var msg = new Date().toFormat('[YYYY/MM/DD HH24:MI:SS] 起動しました');
+hecomiroid.updateStatus(msg, function (data) {
+	console.log('[Twitter] 「' + msg + '」とつぶやきました');
+});
+
+// ストリームつないでコマンド待受
+hecomiroid.stream('user', function(stream) {
+	console.log('[Twitter] Stream に接続しました');
+	stream.on('data', function(data) {
+		// フレンドリストがやってきたときは破棄
+		if (!('user' in data)) return;
+
+		var id        = data.user.screen_name;
+		var user      = data.user.name;
+		var text      = data.text.replace(new RegExp('^@' + TW_SETTING.BOT_ID + ' '), '');
+		var isMention = data.in_reply_to_user_id != null;
+
+		// 自分のつぶやきの場合は終了
+		if (!isMention || id === TW_SETTING.BOT_ID) return;
+
+		console.log('[Twitter] 「' + text + '」という命令を受け取りました');
+
+		Interpreter.run(text, true, function(err, result, reply) {
 			if (err) throw err;
-			julius = new Julius( grammar.getJconf() );
-			grammar.deleteFiles();
-			julius.on('result', function(str) {
-				console.log(str);
-				Interpreter.run(str, true);
-			});
-			callback();
-		});
-	},
-	function() {
-		julius.start();
-	}
-]);
 
+			// 返事する言葉がないときはスルー
+			if (reply == '') return;
+
+			var msg = new Date().toFormat('@' + id + ' ' + reply + ' (HH24:MI:SS)');
+			hecomiroid.updateStatus(msg, function (data) {
+				console.log('[Twitter] 「' + msg + '」とつぶやきました');
+			});
+		}, '@' + id /* caller */);
+	})
+});
 // }}}
 
 /* ------------------------------------------------------------------------
@@ -229,6 +335,9 @@ async.series([
 // サーバの設定
 var app = express();
 app.configure(function() {
+	// Basic 認証をかける
+	app.use(express.basicAuth(Settings.basicAuth.user, Settings.basicAuth.pass));
+
 	app.set('port', process.env.PORT || 10080);
 	app.set('views', __dirname + '/views');
 	app.set('view engine', 'ejs');
@@ -319,6 +428,7 @@ var server = http.createServer(app).listen(app.get('port'), function() {
  *    リアルタイムに Web ブラウザとやり取りして、
  *    iRemocon の IR の学習やテスト、機能の名称や
  *    Julius や Twitter での呼びかけや応答の MongoDB への登録を行う
+ *    ToDo: ここの書き方冗長で全般的にダサいので改良したい
  * ------------------------------------------------------------------------ */
 // {{{
 var io = socketio.listen(server);
@@ -588,6 +698,7 @@ io.sockets.on('connection', function(socket) {
 	});
 
 	// コマンドをテストする
+	// ここの書き方ダサい (Interpreter 使いたい）ので何とかしたい
 	socket.on('commands/test', function(command) {
 		console.log('[commands/test]', command);
 		if (command.type == 1) { // 自然言語
@@ -613,9 +724,9 @@ io.sockets.on('connection', function(socket) {
 		} else { // スクリプト
 			try {
 				var result = eval(
-					'(function(args) {\n' +
+					'(function(sentence, caller) {\n' +
 						command.func +
-					'})(command);'
+					'})(command.command, \'test\');'
 				);
 				if (command.reply) TTS.talk(command.reply);
 				socket.emit('commands/test', {
