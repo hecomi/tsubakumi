@@ -6,15 +6,19 @@
 		"start" : "node app"
 	},
 	"dependencies" : {
-		"async"     : "*",
-		"ejs"       : "*",
-		"express"   : "*",
-		"iRemocon"  : "*",
-		"julius"    : "*",
-		"mongoose"  : "*",
-		"openjtalk" : "*",
-		"path"      : "*",
-		"printf"    : "*",
-		"socket.io" : "*",
+		"async"      : "*",
+		"ejs"        : "*",
+		"express"    : "*",
+		"iremocon"   : "*",
+		"julius"     : "*",
+		"mongoose"   : "*",
+		"openjtalk"  : "*",
+		"path"       : "*",
+		"printf"     : "*",
+		"socket.io"  : "*",
+		"twitter"    : "*",
+		"date-utils" : "*",
+		"request"    : "*"
+		"cheerio"    : "*"
 	}
 }

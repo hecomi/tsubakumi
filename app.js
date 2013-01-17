@@ -22,10 +22,9 @@ var Settings   = require('./setting.js')
   , async      = require('async')
   , socketio   = require('socket.io')
   , printf     = require('printf')
-  , iRemocon   = require('iRemocon')
+  , iRemocon   = require('iremocon')
   , iremocon   = new iRemocon(Settings.iRemocon.ip)
   , Julius     = require('julius')
-  , julius     = null
   , OpenJTalk  = require('openjtalk')
   , TTS        = new OpenJTalk()
   , twitter    = require('twitter')
@@ -190,88 +189,99 @@ Command.find({}, function(err, commands) {
  * ------------------------------------------------------------------------ */
 // {{{
 
-function startVoiceRecognition() {
+var VoiceRecog = {
+	julius  : null,
+	grammar : null,
+	start   : function() {
+		// grammar, julius の初期化
+		this.julius  = null;
+		this.grammar = new Julius.Grammar();
 
-	// grammar, julius の初期化
-	julius  = null;
-	grammar = new Julius.Grammar();
-
-	// 誤認識対策（ゴミワードを混ぜておく）
-	var gomi = 'あいうえお';
-	for (var i = 0; i < gomi.length; ++i) {
-		grammar.add(gomi[i]);
-		for (var j = 0; j < gomi.length; ++j) {
-			grammar.add(gomi[i] + gomi[j]);
-			for (var k = 0; k < gomi.length; ++k) {
-				grammar.add(gomi[i] + gomi[j] + gomi[k]);
+		// 誤認識対策（ゴミワードを混ぜておく）
+		var gomi = 'あいうえお';
+		for (var i = 0; i < gomi.length; ++i) {
+			this.grammar.add(gomi[i]);
+			for (var j = 0; j < gomi.length; ++j) {
+				this.grammar.add(gomi[i] + gomi[j]);
+				for (var k = 0; k < gomi.length; ++k) {
+					this.grammar.add(gomi[i] + gomi[j] + gomi[k]);
+				}
 			}
 		}
-	}
 
-	// 一時ファイルに名前をつける
-	grammar.setFileName('kaden');
+		// 一時ファイルに名前をつける
+		this.grammar.setFileName('kaden');
 
-	async.series([
-		// 機器の機能を操作する文章を登録
-		// 機器シンボルもつくっておく
-		function(callback) {
-			Device.find({}, function(err, devices) {
-				var deviceNameArr = [];
-				devices.forEach(function(device) {
-					if (device.name != undefined && device.name != '') {
-						deviceNameArr.push(device.name);
-						var cmd = device.name + '(を)?('
-						device.funcs.forEach(function(func) {
-							if (func.command == '') return;
-							cmd += func.command + '|';
-						});
-						// 最後の | を消す
-						cmd = cmd.slice(0, -1) + ')';
-						grammar.add(cmd);
-					}
+		var self = this;
+		async.series([
+			// 機器の機能を操作する文章を登録
+			// 機器シンボルもつくっておく
+			function(callback) {
+				Device.find({}, function(err, devices) {
+					var deviceNameArr = [];
+					devices.forEach(function(device) {
+						if (device.name != undefined && device.name != '') {
+							deviceNameArr.push(device.name);
+							var cmd = device.name + '(を)?('
+							device.funcs.forEach(function(func) {
+								if (func.command == '') return;
+								cmd += func.command + '|';
+							});
+							// 最後の | を消す
+							cmd = cmd.slice(0, -1) + ')';
+							self.grammar.add(cmd);
+						}
+					});
+					self.grammar.addSymbol('DEVICE', deviceNameArr);
+					self.grammar.add('<DEVICE>');
+					callback();
 				});
-				grammar.addSymbol('DEVICE', deviceNameArr);
-				grammar.add('<DEVICE>');
-				callback();
-			});
-		},
-		// マクロ / コマンドを実行する文章を登録
-		function(callback) {
-			Command.find({}, function(err, commands) {
-				commands.forEach(function(command) {
-					if (command.command !== '') {
-						grammar.add(command.command);
-					}
+			},
+			// マクロ / コマンドを実行する文章を登録
+			function(callback) {
+				Command.find({}, function(err, commands) {
+					commands.forEach(function(command) {
+						if (command.command !== '') {
+							self.grammar.add(command.command);
+						}
+					});
+					callback();
 				});
-				callback();
-			});
-		},
-		function(callback) {
-			grammar.compile(function(err, result) {
-				if (err) throw err;
-				julius = new Julius( grammar.getJconf() );
-				grammar.deleteFiles();
-				julius.on('result', function(str) {
-					console.log(str);
-					Interpreter.run(str, true);
+			},
+			function(callback) {
+				self.grammar.compile(function(err, result) {
+					if (err) throw err;
+					self.julius = new Julius( self.grammar.getJconf() );
+					self.grammar.deleteFiles();
+					self.julius.on('result', function(str) {
+						console.log(str);
+						Interpreter.run(str, true);
+					});
+					callback();
 				});
-				callback();
-			});
-		},
-		function() {
-			julius.start();
-		}
-	]);
-}
+			},
+			function() {
+				self.julius.start();
+			}
+		]);
+	},
+	stop : function() {
+		this.julius.stop();
+		this.julius = null;
+	},
+	// メモリリーク？のせいか Ubuntu 上で重くなる症例に対処
+	// 5 分起きに再起動する
+	restart : function() {
+		if (this.julius !== null) this.julius.stop();
+		this.julius.start();
+	},
+};
 
-// startVoiceRecognition();
+VoiceRecog.start();
+setInterval(function() {
+	VoiceRecog.restart();
+}, 1000 * 60 * 5);
 
-// メモリリーク？のせいか Ubuntu 上で重くなる症例に対処
-// 10 分起きに再起動する
-// setInterval(function() {
-// 	julius.stop();
-// 	startVoiceRecognition();
-// }, 1000 * 60 * 10);
 
 // }}}
 
