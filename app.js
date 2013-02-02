@@ -30,6 +30,9 @@ var Settings   = require('./setting.js')
   , twitter    = require('twitter')
   , date_utils = require('date-utils')
   , TW_SETTING = require('./twitter.oauth.js')
+  , WeMo       = require('wemo')
+  , SerialPort = require("serialport").SerialPort
+  , xbee       = require("xbee")
 ;
 
 // Commands で使いそうなもの
@@ -756,6 +759,125 @@ io.sockets.on('connection', function(socket) {
 	});
 
 });
+
+// }}}
+
+/* ------------------------------------------------------------------------
+ *  WeMo
+ *    部屋の出入りの自動化
+ * ------------------------------------------------------------------------ */
+// {{{
+var wemoMotion = new WeMo(Settings.WeMo_Motion.ip);
+wemoMotion.state     = 0;
+wemoMotion.count     = 0;
+wemoMotion.presence  = 1;
+wemoMotion.threshold = 60*60;
+setInterval(function() {
+	wemoMotion.getBinaryState(function(err, result) {
+		if (err) console.error(err);
+		switch (parseInt(result) - wemoMotion.state) {
+			case 1:
+				console.log('[WeMo] detect move!');
+				if (wemoMotion.count > wemoMotion.threshold) {
+					var hour = new Date().getHours();
+					if (hour < 3 || hour > 9) {
+						talk('おかえりなさい！');
+						tweet('@hecomi おかえりなさい [' + new Date() + ']');
+						run('電気つけて');
+						run('モニタつけて');
+					}
+				}
+				wemoMotion.presence = 1;
+				wemoMotion.count    = 0;
+				break;
+			case 0:
+				if (wemoMotion.presence === 1 && wemoMotion.count > wemoMotion.threshold) {
+					talk('自動オフします', function() {
+						tweet('自動オフします [' + new Date() + ']');
+						run('電気消して');
+						run('モニタ消して');
+					});
+					wemoMotion.presence = 0;
+				}
+				break;
+			case -1:
+				console.log('[WeMo] detect no motion');
+				break;
+			default:
+				console.error('unexpected error');
+				break;
+		}
+		wemoMotion.state = parseInt(result);
+		wemoMotion.count++;
+	});
+}, 1000);
+// }}}
+
+/* ------------------------------------------------------------------------
+ *  ZigBee
+ *    温度の自動調節
+ * ------------------------------------------------------------------------ */
+// {{{
+// コマンドで使えるようにグローバル
+var temperature = 0;
+
+// エアコン自動調節
+var AirCon = {
+	STATE: {
+		OFF : 0,
+		ON  : 1,
+	},
+	state: 0
+};
+function fix_temperature(T) {
+	if (T > 28 && AirCon.state === AirCon.STATE.OFF) {
+		console.log('[XBee] 部屋を冷やします');
+		talk('部屋を冷やします');
+		tweet('部屋を冷やします');
+		run('エアコンつけて');
+		run('エアコン冷房');
+		run('エアコン26度');
+		AirCon.state = AirCon.STATE.ON;
+	}
+	else if (T < 22 && AirCon.state === AirCon.STATE.OFF) {
+		console.log('[XBee] 部屋を温めます');
+		talk('部屋を温めます');
+		tweet('部屋を温めます');
+		run('エアコンつけて');
+		run('エアコン暖房');
+		run('エアコン26度');
+		AirCon.state = AirCon.STATE.ON;
+	}
+	else if (T > 25 && T < 27 && AirCon.state === AirCon.STATE.ON) {
+		console.log('[XBee] エアコン切ります');
+		talk('エアコンを切ります');
+		tweet('エアコンを切ります');
+		run('エアコン消して');
+		AirCon.state = AirCon.STATE.OFF;
+	}
+}
+
+// XBee から情報取得
+var serial_xbee = new SerialPort("/dev/ttyUSB0", {
+	parser: xbee.packetParser()
+});
+
+serial_xbee.on("data", function(data) {
+	var ain3hi  = data.bytes[19];
+	var ain3lo  = data.bytes[20];
+	var voltage = 1.2 * (ain3hi * 0x0100 + ain3lo) / 0x03ff;
+	temperature = (voltage - 0.6) * 100;
+	fix_temperature(temperature);
+});
+
+var atc = new xbee.RemoteATCommand();
+atc.setCommand('IS');
+atc.destination64 = Settings.XBee_temperature.address;
+atc.destination16 = [0xff,0xfe];
+
+setInterval(function() {
+	serial_xbee.write( atc.getBytes() );
+}, 1000);
 
 // }}}
 

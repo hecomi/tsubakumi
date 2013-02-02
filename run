@@ -1,0 +1,6 @@
+#!/bin/sh
+
+while true; do
+	node-dev app.js
+done
+

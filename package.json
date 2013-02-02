@@ -20,5 +20,9 @@
 		"date-utils" : "*",
 		"request"    : "*"
 		"cheerio"    : "*"
+		"goo.gl"     : "*"
+		"wemo"       : "*"
+		"serialport" : "*"
+		"xbee"       : "*"
 	}
 }
